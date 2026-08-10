@@ -1,0 +1,213 @@
+# RULES.TXT — Kural Denetim Metni
+#
+# Bu dosyaya serbest doğal dilde, madde madde kurallar yazın.
+# Model her istek anında bu dosyayı yeniden okur (cache'lenmez),
+# bu yüzden dosyayı değiştirdikten sonra sunucuyu yeniden başlatmanıza gerek yoktur.
+
+# Veritabanı Standartları ve İsimlendirme Kuralları
+
+> Kuveyt Türk BT - Veri Yönetimi referans dokümanı
+
+---
+
+## 1. View Oluşturma Standartları
+
+Anlık (ad-hoc) view oluşturulurken kullanılacak standartlar. Amaç: ad-hoc raporlama sisteminin sadeliğini korumak ve ihtiyaca en hızlı cevabı verebilecek şekilde, iş birimi bazlı Data Mart'lar altında view tasarımını sağlamak.
+
+### İsimlendirme
+- camelCase
+- Tekil
+- `v` öneki ile başlamalı
+- İçeriğine uygun İngilizce kelimeler kullanılmalı
+- **Örnek:** `CIO.vIncidentCount`
+
+### Konumlandırma
+- Her iş birimi kendi yetkili olduğu Data Mart içinde view oluşturur
+- İçine eklenecek her tablo için uygun index'ler oluşturulmuş olmalı
+- WHERE cümleciğinde olabildiğince basit kriterler kullanılmalı, ihtiyaç kadar veri dönülmeli
+- Her Data Mart farklı bir şema ile ifade edilir
+- Süreli olarak `BOADWH` veritabanı altında oluşturulur
+
+### Yapı
+- Karmaşık hesaplamalardan kaçınılmalı, sade tasarlanmalı
+- Hesaplama/gruplama işlemleri Power BI gibi araçlarda yapılmalı, view'de değil
+- Sadece ihtiyaç kadar kolon dönülmeli
+
+---
+
+## 2. Veritabanı Paketleri Onaylanırken Dikkat Edilecek Hususlar
+
+### Genel Konular
+- CREATE, ALTER, DROP, DISABLE işlemleri için geçiş zamanlaması uygun olmalı
+- Audit/History tablosu olan bir tabloda kolon drop/alter/add yapılıyorsa, Audit/History tablolarında da aynı değişiklik yapılmalı
+- Kritik tablolardaki işlemler için erişilebilirlik açısından acil nesne ile geçiş değerlendirilmeli
+- Kritik tablolarda DML işlemleri bulk yapılmamalı; mümkünse tekil alan üzerinden tek tek yapılmalı
+- Data güncelleme statement'larında kaç satır güncelleneceği yorum satırı olarak belirtilmeli
+- DB nesnelerinin kod bloğuyla birlikte geçiş zamanlaması değerlendirilmeli
+- Güncellenecek tablo dışındaki join tablolarında `(NOLOCK)` kontrol edilmeli
+- Veri güncelleme ihtiyacının nedeni tespit edilip önlem alınmalı
+- `UpdateUserName`, `UpdateSystemDate` alanları varsa set edildiğinden emin olunmalı
+- Fonksiyonel testler dışında performans testleri de yapılmalı
+
+### Değişiklik Ekranları
+- Timeout süresi **3 dakikadır** — n nesne geçilirken timeout riski değerlendirilmeli
+- Aynı paket transactional yapıdadır: bir nesne hata alırsa diğerlerinin geçişi de engellenir
+- Riskli durumlarda değişiklik paketi hiyerarşiye uygun şekilde parçalanabilir; parçalama mümkün değilse DB admin kontrolünde acil nesne ile geçilmeli
+- Nesne çalışma süresi makul olmalı (3 dk'yı aşan paketler timeout alır)
+- "Hata alırsa devam et" seçeneği business'ı etkilemeyecek şekilde kurgulanmalı
+- "Testi Atla", "Prepi Atla" seçenekleri gerekli durumlar haricinde kullanılmamalı
+
+### Link Server
+- Task SP'lerinde gereklilik halinde kullanılabilir; son kullanıcıyla temas eden nesnelerde kullanılmamalı
+- **ATLAS** sunucusundan **BOADWH**'a erişim gerekiyorsa link server kullanılmalı (aksi halde runtime hatası alınır)
+- **DENİZ** sunucusundan **BOADWH**'a erişimde link server kullanılmamalı (performans sorunu yaratır)
+- Sadece veri çekmek (SELECT) için kullanılmalı
+- Basit SELECT sorguları için kullanılmalı; complex yapılar ve transaction tablolarıyla JOIN yapılmamalı
+
+---
+
+## 3. Veritabanı Tablo Tasarım Kuralları
+
+Tasarımlar "Normalizasyon Prensipleri" kullanılarak, veri bütünlüğü/tutarlılığı sağlanacak ve veri tekrarı en aza indirilecek şekilde yapılır.
+
+### ER Diyagramları
+- Tablo tasarımları ER dokümanı olarak çizilmeli
+- Tablo oluşturulmadan önce BT-Veri Yönetimi Servisi'ndeki Veri Mimarı ile görüşülmeli (BCP onaylarını kolaylaştırır)
+
+### Veritabanı ve Tablo Konumlandırma
+- Hangi veritabanına konumlandırılacağı Veri Mimarı ile istişare edilerek belirlenmeli
+- Sistemsel/log tutan tablolar, BOA gibi iş mantığı yoğun sistemlere konulmamalı
+- BOA ile ilişkili yoğun veri okuma söz konusuysa farklı sunucularda konumlandırılmamalı
+
+### Kolonlar
+- Kolon isimleri veri sözlüğünden seçilmeli; veri tipleri de veri sözlüğüyle birebir uyumlu olmalı
+- Veri sözlüğünde olmayan yeni bir alan tanımlanacaksa, veri sözlüğüne eklenmeli
+- Kolon tipleri mümkün olduğunca küçük olmalı (örn. yeterliyse BIGINT yerine INT)
+- Metin alanları için `varchar`/`char` kullanılmalı; `nvarchar`/`nchar` kullanılmamalı
+- Sabit boyutlu metinlerde `char`, değişkense `varchar` kullanılmalı
+- Zorunlu kolonlar `NOT NULL` tanımlanmalı
+- Tanım alanları `Description` adında ve `varchar(500)` tipinde olmalı
+- `bit` veri tipi kullanılmamalı
+- Identity alan adı `Id` değil `<TabloAdı>Id` şeklinde olmalı
+- Uygun bir PK kolonu varsa ayrıca `<TabloAdı>Id` kolonu eklenmemeli
+- `ntext`, `text`, `image` gibi deprecate olan veri tipleri kullanılmamalı
+
+
+
+### Özel Veritabanları
+| Veritabanı | Kullanım Amacı |
+|---|---|
+| **BOAArchive** | BOA'daki tabloların arşivlenmesi. Diğer veritabanlarının verisi burada tutulamaz |
+| **BOAAudit** | BOA, BOAERP gibi veritabanlarındaki veri değişikliklerinin loglanması. Sistem/uygulama logları burada tutulmaz |
+| **BOATemp** | Dış sistem entegrasyonlarında kullanılan ara/geçici tablolar, batch işlem geçici verileri. Yedeklenmez, veriler değersiz kabul edilir |
+
+---
+
+## 4. SQL Nesneleri İsimlendirme Standartları
+
+### Genel Kabuller
+- Tüm nesne isimleri İngilizce olmalı
+
+### Schema
+- 3 karakterden oluşmalı
+- Büyük harflerle yazılmalı
+- **Örnek:** Customer nesneleri için `CUS`
+
+### Tablo
+- İngilizce, PascalCase, tekil
+- Identity kolon adı, tablo adı + `Id` şeklinde olmalı
+  - Örn. `INF.NotificationDefinition` tablosunun identity kolonu `NotificationDefinitionId` olmalı, `NotificationId` değil
+- Açıklama alanı varsa `Description` olmalı, tipi genelde `varchar(500)`
+- **Örnekler:** `CUS.Customer`, `CUS.CustomerAddress`
+
+### Sütun
+- PascalCase, alt çizgi yok, boşluk yok
+- Tanım tablolarında identity yetmez, `<tanımAdı>Code` alanı da belirlenmeli
+- Identity alan adı `<AlanAdı>Id` olmalı (`<AlanAdı>ID` değil)
+- Kısaltmalar Türkçe imla kurallarına uygun olmalı (örn. `Sms`, `SMS` değil)
+- Kolon adları (identity hariç) tablo adını içermemeli
+- Mümkünse yeni kolon adları mevcut kolon adlarından seçilmeli
+- Veri sözlüğü/refactoring çalışmasındaki isim değişiklikleri dikkate alınmalı (örn. `State` yerine `Status`)
+
+### View
+- camelCase, tekil, `v` öneki
+- **Örnek:** `CUS.vCustomerAddress`
+
+### Stored Procedure
+- camelCase, tekil
+- Format: `işlem(3 karakter)_AmacaYönelikİsim`
+- **Örnekler:** `CUS.ins_Customer`, `CUS.del_Customer`, `CUS.sel_GetCustomer`, `CUS.upd_Customer`
+
+### Stored Procedure Parametreleri
+- PascalCase, alt çizgi yok
+- Overload/numaralı versiyon kullanılmaz
+- Tablo sütununa karşılık geliyorsa aynı isim kullanılmalı (örn. kolon `CustomerNo` ise parametre de `CustomerNo`)
+
+### Function
+- camelCase, tekil, `f` öneki
+- **Örnek:** `CUS.fGetCustomer`
+
+### Trigger
+- camelCase, tekil
+- `tri`, `trd`, `tru` öneki + tablo adı
+- Birden fazla işlem varsa `tr` + işlem harfleri (sıra: `i`, `d`, `u`)
+- **Örnekler:** `tri_Customer`, `trid_Customer`
+
+### Index
+- PascalCase
+- Format: `Clustered/Non-clustered + Unique/Non-uniqueness + X + _ + TabloAdı + _ + Field1 + _ + ... + FieldN`
+- **Örnekler:**
+  - Non-clustered Unique: `NCUX_Customer_CustomerNo_Suffix`
+  - Non-clustered Non-unique: `NCIX_ChequeBook_AccountNumber`
+  - Clustered Non-unique: `CIX_Account_AccountNumber_AccountSuffix`
+- Anlaşılmayacak kısaltmalardan kaçınılmalı (örn. `CusNo` değil `CustomerNumber`)
+
+### Kullanıcı Tanımlı Veri Türleri
+- PascalCase, `tp<SütunAdı>` formatında
+- Eklenmeden önce Kurumsal Mimari Müdürlüğü'ne bilgi verilmeli
+- **Örnek:** `tpBusinessKey`
+
+### Değişkenler (Variables)
+- PascalCase (parametreler için de aynı standart)
+- **Örnek:** `@CustomerNo`
+
+### Karton Tablolarda Tarih Alanları
+- **SystemDate:** İşlemin gerçek yapıldığı tarih (`System.Now`, datetime) — business değeri yoktur, sadece loglama
+- **TranDate:** Muhasebe fişinin kesildiği tarih (`Channel.Today`, smalldatetime)
+- Listeleme ekranlarında tarih kriteri olarak `BusinessDate` kullanılmalı
+
+### Loglama/Geçmiş İçin 7 Standart Kolon
+```sql
+[UserName] [varchar](10) NULL,
+[HostName] [varchar](20) NULL,
+[SystemDate] [datetime] NULL,
+[UpdateUserName] [varchar](10) NULL,
+[UpdateHostName] [varchar](20) NULL,
+[UpdateSystemDate] [datetime] NULL,
+[HostIP] [varchar](15) NULL,
+```
+
+---
+
+## 5. Veri Tipleri Standartları
+
+- Kullanıcı tanımlı (user-defined) tipler kullanılmamalı
+- İkincil anahtar alanlar, ana tablodaki birincil anahtarla aynı veri tipinde olmalı
+  - Örn: `BranchId → smallint`, `AccountNumber → int`, `ProductCode → varchar(20)`, `BusinessKey → numeric(27,0)`
+- İstisna: Ana tablo kolonu yanlış tipteyse, ikincil tablo doğru tipte oluşturulur, sonra ana tablo da düzeltilir
+- Metin alanlarında `nvarchar` yerine `varchar` (istisna: Unicode veri)
+- Karakter sayısı sabitse `char` kullanılmalı
+- **Para:** `numeric(22,2)` — **Kur:** `numeric(14,5)` — `decimal` kullanılmamalı
+- Ondalıksız veriler için `smallint`, `int`, `tinyint` kullanılmalı; `bigint` kullanılmamalı
+
+| Tip | Aralık |
+|---|---|
+| `tinyint` | 0 – 255 |
+| `smallint` | -32,768 – 32,767 |
+| `int` | -2,147,483,648 – 2,147,483,647 |
+| `bigint` (kullanılmaz) | -9,223,372,036,854,775,808 – 9,223,372,036,854,775,807 |
+
+- Doğru/Yanlış alanlar için `tinyint` kullanılmalı; `bit` kullanılmamalı
+- `ntext`, `text`, `image` kullanılmamalı
+- Kolon tipi içerdiği veriyle tutarlı olmalı (örn. `InsertDate` varchar olmamalı)
+- `varchar(max)` kullanımından kaçınılmalı

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SQL Kural Denetimi</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>SQL Tablo Kural Denetimi</h1>
+      <p class="subtitle">MSSQL sorgu sonuçlarını model tabanlı kural denetiminden geçirin.</p>
+    </header>
+
+    <section class="controls">
+      <label class="field">
+        <span>Model Sağlayıcı</span>
+        <select id="provider-select">
+          <option value="claude">Claude API</option>
+          <option value="local">Yerel Model (yakında)</option>
+        </select>
+      </label>
+
+      <button id="run-button">Sorguyu Çalıştır ve Denetle</button>
+
+      <span id="loading-indicator" class="loading hidden">
+        <span class="spinner"></span> Çalışıyor, lütfen bekleyin...
+      </span>
+    </section>
+
+    <div id="error-banner" class="error-banner hidden"></div>
+
+    <section id="summary" class="summary hidden">
+      <span class="badge badge-onay"><span id="summary-onay">0</span> ONAY</span>
+      <span class="badge badge-iade"><span id="summary-iade">0</span> İADE</span>
+      <span id="summary-hata-wrap" class="badge badge-hata hidden"><span id="summary-hata">0</span> HATA</span>
+    </section>
+
+    <section id="results" class="results hidden">
+      <div class="result-group">
+        <h2 class="group-title group-title-onay">ONAY</h2>
+        <div id="onay-list" class="row-list"></div>
+      </div>
+      <div class="result-group">
+        <h2 class="group-title group-title-iade">İADE</h2>
+        <div id="iade-list" class="row-list"></div>
+      </div>
+      <div id="hata-group" class="result-group hidden">
+        <h2 class="group-title group-title-hata">HATA</h2>
+        <div id="hata-list" class="row-list"></div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
