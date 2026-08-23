@@ -10,11 +10,13 @@ from config import PROJECT_ROOT
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 
+from auth import authenticate
 from config import MAX_CONCURRENT_MODEL_CALLS, REQUIRED_COLUMNS, TERM_MATCH_COLUMN_KEY
 from db import DatabaseError, fetch_main_rows, fetch_term_reference_data
 from providers.base import ModelProvider, ModelProviderError
@@ -23,13 +25,36 @@ from providers.local_provider import LocalProvider
 from rules_loader import RulesFileNotFoundError, load_rules
 from script_parser import parse_column_changes
 
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
+if not SESSION_SECRET_KEY:
+    raise RuntimeError(
+        "SESSION_SECRET_KEY .env dosyasinda tanimli olmali "
+        "(oturum cookie'lerini imzalamak icin, bkz. .env.example)."
+    )
+
 app = FastAPI(title="SQL Table Rule Check")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET_KEY,
+    same_site="lax",
+    max_age=60 * 60 * 8,  # 8 saat
+)
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
 
+def require_auth(request: Request) -> None:
+    if not request.session.get("user_id"):
+        raise HTTPException(status_code=401, detail="Oturum bulunamadı, giriş yapın.")
+
+
 class RunCheckRequest(BaseModel):
     provider: str = "claude"
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 
 def get_provider(name: str) -> ModelProvider:
@@ -125,7 +150,35 @@ async def _process_row(
     }
 
 
-@app.post("/api/run-check")
+@app.post("/api/login")
+async def login(body: LoginRequest, request: Request):
+    try:
+        user = authenticate(body.username, body.password)
+    except DatabaseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    if user is None:
+        raise HTTPException(status_code=401, detail="Kullanıcı adı veya şifre hatalı.")
+
+    request.session["user_id"] = user["UserId"]
+    request.session["username"] = user["Username"]
+    return {"username": user["Username"]}
+
+
+@app.post("/api/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return {"ok": True}
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    if not request.session.get("user_id"):
+        raise HTTPException(status_code=401, detail="Oturum yok.")
+    return {"username": request.session.get("username")}
+
+
+@app.post("/api/run-check", dependencies=[Depends(require_auth)])
 async def run_check(body: RunCheckRequest):
     try:
         rules_text = load_rules()
@@ -166,6 +219,11 @@ async def run_check(body: RunCheckRequest):
 @app.get("/")
 async def serve_index():
     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+
+
+@app.get("/login")
+async def serve_login():
+    return FileResponse(os.path.join(FRONTEND_DIR, "login.html"))
 
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")

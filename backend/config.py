@@ -94,6 +94,13 @@ SELECT TOP 0
     CAST(NULL AS varchar(200)) AS TableName
 """
 
+# --- Kullanici girisi (bkz. auth.py, migrations/001_create_appuser.sql) ---
+USER_LOOKUP_QUERY = """
+SELECT UserId, Username, PasswordHash, IsActive
+FROM DataGov.DTG.AppUser
+WHERE Username = ? AND IsActive = 1
+"""
+
 # --- Diğer ayarlar ---
 RULES_FILE_PATH = os.getenv("RULES_FILE_PATH", os.path.join(PROJECT_ROOT, "rules.txt"))
 

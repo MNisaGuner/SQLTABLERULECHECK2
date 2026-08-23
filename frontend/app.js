@@ -1,4 +1,5 @@
 const runButton = document.getElementById("run-button");
+const logoutButton = document.getElementById("logout-button");
 const providerSelect = document.getElementById("provider-select");
 const loadingIndicator = document.getElementById("loading-indicator");
 const errorBanner = document.getElementById("error-banner");
@@ -224,6 +225,10 @@ function renderResults(data) {
   resultsSection.classList.remove("hidden");
 }
 
+function goToLogin() {
+  window.location.href = "/login";
+}
+
 async function runCheck() {
   hideError();
   setLoading(true);
@@ -234,8 +239,14 @@ async function runCheck() {
     const response = await fetch("/api/run-check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
       body: JSON.stringify({ provider: providerSelect.value }),
     });
+
+    if (response.status === 401) {
+      goToLogin();
+      return;
+    }
 
     const data = await response.json();
 
@@ -251,4 +262,25 @@ async function runCheck() {
   }
 }
 
+async function checkSession() {
+  try {
+    const response = await fetch("/api/me", { credentials: "same-origin" });
+    if (response.status === 401) {
+      goToLogin();
+    }
+  } catch (err) {
+    // Ag hatasi vb. -- sayfada kal, kullanici butona basinca zaten hata gorecek.
+  }
+}
+
+async function logout() {
+  try {
+    await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+  } finally {
+    goToLogin();
+  }
+}
+
 runButton.addEventListener("click", runCheck);
+logoutButton.addEventListener("click", logout);
+checkSession();

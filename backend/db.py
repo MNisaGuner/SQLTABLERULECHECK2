@@ -15,6 +15,7 @@ from config import (
     MAIN_QUERY,
     REQUIRED_COLUMNS,
     TERM_MATCH_QUERY,
+    USER_LOOKUP_QUERY,
 )
 
 
@@ -159,3 +160,29 @@ def fetch_term_reference_data() -> list[dict]:
     finally:
         conn.close()
     return rows
+
+
+def fetch_user_by_username(username: str) -> dict | None:
+    """Login icin AppUser satirini ceker (SELECT, salt okunur). Bulunamazsa None doner."""
+    conn = _get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(USER_LOOKUP_QUERY, username)
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        columns = [col[0] for col in cursor.description]
+        return dict(zip(columns, row))
+    except pyodbc.Error as exc:
+        raise DatabaseError(f"Kullanici sorgu hatasi: {exc}") from exc
+    finally:
+        conn.close()
+
+
+def get_raw_connection() -> pyodbc.Connection:
+    """Dogrudan pyodbc baglantisi dondurur -- SADECE admin/CLI script'leri icin
+    (orn. scripts/create_user.py). Web uygulamasinin kendisi (main.py) bu
+    fonksiyonu KULLANMAZ; run_check/login akislari yalnizca yukaridaki
+    fetch_* (SELECT) fonksiyonlarindan gecer. Bu, bilerek disariya acik
+    birakilmis tek yazma (INSERT) yolu."""
+    return _get_connection()
