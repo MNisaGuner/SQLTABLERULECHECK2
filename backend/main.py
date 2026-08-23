@@ -21,6 +21,7 @@ from providers.base import ModelProvider, ModelProviderError
 from providers.claude_provider import ClaudeProvider
 from providers.local_provider import LocalProvider
 from rules_loader import RulesFileNotFoundError, load_rules
+from script_parser import parse_column_changes
 
 app = FastAPI(title="SQL Table Rule Check")
 
@@ -59,24 +60,55 @@ async def _process_row(
         f"{required['DatabaseName']}-{required['SchemaName']}-{required['TableName']}"
     )
 
-    async with semaphore:
-        try:
-            karar_result = await provider.check_row(extra, rules_text)
-            karar = karar_result["karar"]
-            gerekce = karar_result["gerekce"]
-            hata = None
-        except ModelProviderError as exc:
-            karar = "HATA"
-            gerekce = ""
-            hata = str(exc)
+    # TumKolonlar sadece ekranda tam baglam icin kullanilir, modele GONDERILMEZ.
+    tum_kolonlar = extra.pop("TumKolonlar", [])
+    # OnayBekleyenKolonlar (DataItem.StatusId=5) extra icinde kalir; kural
+    # denetiminin TEK kolon kaynagidir, provider.check_row'a bununla gidilir.
 
+    # Script'in hangi kolona ADD/ALTER/DROP yaptigini kendi metninden cikar
+    # (StatusId bunu ayirt etmiyor, ozellikle DROP icin hic kod yok).
+    degisen_kolonlar = parse_column_changes(
+        extra.get("ScriptText"),
+        required["DatabaseName"],
+        required["SchemaName"],
+        required["TableName"],
+    )
+
+    auto_approved = False
+    if not degisen_kolonlar:
+        # Script tek basina ana tabloya dokunmuyor (sadece audit/arsiv
+        # companion script'i) -- kullanici karar verirken bunlara bakmiyor,
+        # sadece ana tablo degisikligine odaklaniyor. Model cagrisi atlanir.
+        auto_approved = True
+        karar = "ONAY"
+        gerekce = (
+            "Bu script ana tabloyu "
+            f"({required['DatabaseName']}.{required['SchemaName']}.{required['TableName']}) "
+            "hedeflemiyor (audit/arşiv companion script'i); ana tablo dışı "
+            "script'ler ayrıca kural denetiminden geçirilmiyor, otomatik "
+            "onaylandı."
+        )
+        hata = None
         term_status = None
-        column_name = extra.get(TERM_MATCH_COLUMN_KEY)
-        if column_name:
+    else:
+        async with semaphore:
             try:
-                term_status = await provider.check_term_match(str(column_name), reference_data)
+                karar_result = await provider.check_row(extra, rules_text)
+                karar = karar_result["karar"]
+                gerekce = karar_result["gerekce"]
+                hata = None
             except ModelProviderError as exc:
-                term_status = {"durum": "hata", "terim": None, "oneriler": [], "hata": str(exc)}
+                karar = "HATA"
+                gerekce = ""
+                hata = str(exc)
+
+            term_status = None
+            column_name = extra.get(TERM_MATCH_COLUMN_KEY)
+            if column_name:
+                try:
+                    term_status = await provider.check_term_match(str(column_name), reference_data)
+                except ModelProviderError as exc:
+                    term_status = {"durum": "hata", "terim": None, "oneriler": [], "hata": str(exc)}
 
     return {
         **required,
@@ -87,7 +119,9 @@ async def _process_row(
         "term_status": term_status,
         "script_text": extra.get("ScriptText"),
         "table_description": extra.get("TableDescription"),
-        "columns": extra.get("Kolonlar", []),
+        "columns": tum_kolonlar,
+        "changed_columns": degisen_kolonlar,
+        "auto_approved": auto_approved,
     }
 
 
@@ -114,7 +148,12 @@ async def run_check(body: RunCheckRequest):
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_MODEL_CALLS)
     tasks = [_process_row(row, rules_text, reference_data, provider, semaphore) for row in rows]
-    results = await asyncio.gather(*tasks)
+    all_results = await asyncio.gather(*tasks)
+
+    # Ana tabloya dokunmayan (sadece audit/arsiv companion) script'ler
+    # sonuc listesine hic girmez -- kullanici bunlari ayri bir onay/iade
+    # kalemi olarak gormek istemiyor.
+    results = [r for r in all_results if not r["auto_approved"]]
 
     summary = {
         "onay": sum(1 for r in results if r["karar"] == "ONAY"),

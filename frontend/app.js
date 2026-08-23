@@ -50,21 +50,41 @@ function escapeHtml(str) {
 }
 
 const GEREKCE_LABEL = { IADE: "İade sebebi", HATA: "Hata" };
+const CHANGE_ROW_CLASS = { ADD: "col-added", ALTER: "col-altered", DROP: "col-dropped" };
 
-function columnsTableMarkup(columns) {
-  if (!columns || columns.length === 0) {
+function columnsTableMarkup(columns, changedColumns) {
+  const changeMap = new Map(
+    (changedColumns || []).map((c) => [(c.column || "").toLowerCase(), c.change_type])
+  );
+  const existingNames = new Set((columns || []).map((c) => (c.KolonAdi || "").toLowerCase()));
+
+  if ((!columns || columns.length === 0) && (!changedColumns || changedColumns.length === 0)) {
     return '<div class="row-empty">Kolon bilgisi yok.</div>';
   }
-  const rows = columns
-    .map(
-      (c) => `
-        <tr>
+
+  const rows = (columns || [])
+    .map((c) => {
+      const rowClass = CHANGE_ROW_CLASS[changeMap.get((c.KolonAdi || "").toLowerCase())] || "";
+      return `
+        <tr class="${rowClass}">
           <td>${escapeHtml(c.KolonAdi || "-")}</td>
           <td>${escapeHtml(c.VeriTipi || "-")}</td>
+          <td class="col-center">${escapeHtml(c.BosBirakilabilir || "-")}</td>
           <td class="col-center">${escapeHtml(c.Identity || "-")}</td>
           <td class="col-center">${escapeHtml(c.BirincilAnahtar || "-")}</td>
           <td>${escapeHtml(c.Aciklama || "-")}</td>
           <td>${escapeHtml(c.IsTerimi || "-")}</td>
+        </tr>`;
+    })
+    .join("");
+
+  const droppedRows = (changedColumns || [])
+    .filter((c) => c.change_type === "DROP" && !existingNames.has((c.column || "").toLowerCase()))
+    .map(
+      (c) => `
+        <tr class="col-dropped">
+          <td>${escapeHtml(c.column)}</td>
+          <td colspan="6"><em>Script'te siliniyor (DROP COLUMN) — tabloda artık bulunmuyor</em></td>
         </tr>`
     )
     .join("");
@@ -75,13 +95,14 @@ function columnsTableMarkup(columns) {
         <tr>
           <th>Kolon Adı</th>
           <th>Fiziksel Veri Tipi</th>
+          <th class="col-center">Boş Bırakılabilir</th>
           <th class="col-center">Identity</th>
           <th class="col-center">Birincil Anahtar</th>
           <th>Kolon Açıklaması</th>
           <th>İş Terimi</th>
         </tr>
       </thead>
-      <tbody>${rows}</tbody>
+      <tbody>${rows}${droppedRows}</tbody>
     </table>
   `;
 }
@@ -118,6 +139,7 @@ function buildRowElement(row) {
           <span class="row-field-sub">Tablo Açıklaması: ${escapeHtml(row.table_description || "-")}</span>
         </div>
         <span class="row-toggle-hint">Kolonları göster ▾</span>
+        ${row.script_text ? '<span class="row-script-toggle-hint">Script\'i göster ▾</span>' : ""}
       </div>
       <div class="row-actions">
         <button class="copy-btn" data-copy="${escapeHtml(row.label)}">Kopyala</button>
@@ -126,7 +148,8 @@ function buildRowElement(row) {
     </div>
     ${gerekceLabel ? `<div class="row-gerekce"><span class="row-gerekce-label">${escapeHtml(gerekceLabel)}:</span> ${escapeHtml(gerekceText || "-")}</div>` : ""}
     ${termStatusMarkup(row.term_status)}
-    <div class="row-columns hidden">${columnsTableMarkup(row.columns)}</div>
+    <div class="row-columns hidden">${columnsTableMarkup(row.columns, row.changed_columns)}</div>
+    ${row.script_text ? `<div class="row-script hidden"><pre>${escapeHtml(row.script_text)}</pre></div>` : ""}
   `;
 
   const header = wrapper.querySelector(".row-header");
@@ -136,6 +159,16 @@ function buildRowElement(row) {
     const isOpen = columnsPanel.classList.toggle("hidden") === false;
     toggleHint.textContent = isOpen ? "Kolonları gizle ▴" : "Kolonları göster ▾";
   });
+
+  const scriptToggleHint = wrapper.querySelector(".row-script-toggle-hint");
+  const scriptPanel = wrapper.querySelector(".row-script");
+  if (scriptToggleHint && scriptPanel) {
+    scriptToggleHint.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const isOpen = scriptPanel.classList.toggle("hidden") === false;
+      scriptToggleHint.textContent = isOpen ? "Script'i gizle ▴" : "Script'i göster ▾";
+    });
+  }
 
   wrapper.querySelectorAll(".copy-btn").forEach((btn) => {
     btn.addEventListener("click", async (event) => {

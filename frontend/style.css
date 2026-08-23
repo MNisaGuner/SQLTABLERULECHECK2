@@ -218,11 +218,36 @@ button#run-button:disabled {
   gap: 20px;
 }
 
-.row-toggle-hint {
+.row-toggle-hint,
+.row-script-toggle-hint {
   font-size: 11px;
   color: var(--accent);
   white-space: nowrap;
   align-self: center;
+  cursor: pointer;
+}
+
+.row-script-toggle-hint:hover {
+  text-decoration: underline;
+}
+
+.row-script {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.row-script pre {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 340px;
+  overflow-y: auto;
 }
 
 .row-field {
@@ -274,6 +299,26 @@ button#run-button:disabled {
   padding: 7px 10px;
   text-align: left;
   border-bottom: 1px solid var(--border);
+}
+
+.col-table tbody tr.col-added {
+  background: rgba(62, 207, 142, 0.22);
+  box-shadow: inset 3px 0 0 var(--onay);
+}
+
+.col-table tbody tr.col-altered {
+  background: rgba(255, 149, 0, 0.3);
+  box-shadow: inset 3px 0 0 #ff9500;
+}
+
+.col-table tbody tr.col-dropped {
+  background: rgba(229, 72, 77, 0.24);
+  box-shadow: inset 3px 0 0 var(--hata);
+}
+
+.col-table tbody tr.col-dropped em {
+  color: var(--hata);
+  font-style: normal;
 }
 
 .col-table th {

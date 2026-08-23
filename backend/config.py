@@ -53,12 +53,15 @@ WHERE T7.StatusId = 0
 # fetch_columns_for_datasets() tarafindan, "WHERE di.DataSetId IN (...)" seklinde
 # parametrik olarak calistirilir. Identity/PrimaryKey formati kullanicinin verdigi
 # referans sorguyla birebir aynidir (CASE ile "seed,increment" / "PK" / "-").
+# {status_filter}, only_pending=True oldugunda "AND di.StatusId = 5" ile
+# doldurulur (bkz. COLUMN_STATUS_PENDING), aksi halde bos string olur.
 COLUMN_QUERY_TEMPLATE = """
 SELECT
     di.DataSetId AS DataSetId,
     di.Name AS ColumnName,
     di.Description AS ColumnDescription,
     di.DataType AS PhysicalType,
+    CASE WHEN di.IsNullable = 1 THEN 'NULL' ELSE 'NOT NULL' END AS NullableInfo,
     CASE
         WHEN di.IdentitySeed IS NOT NULL AND di.IdentityIncrement IS NOT NULL
         THEN CONCAT(di.IdentitySeed, ',', di.IdentityIncrement)
@@ -69,8 +72,16 @@ SELECT
 FROM DataGov.DTG.DataItem di WITH (NOLOCK)
 LEFT OUTER JOIN DataGov.DTG.Term t WITH (NOLOCK) ON di.TermId = t.TermId
 WHERE di.DataSetId IN ({placeholders})
+{status_filter}
 ORDER BY di.DataSetId, di.ColumnOrder
 """
+
+# DataGov.DTG.DataItem.StatusId kod sozlugu (Dataone tarafindan yonetilir,
+# biz SADECE OKURUZ, yazmayiz): 0=Taslak, 5=Bilgi Mimari Onayinda,
+# 6=Iade Onayinda, 10=Development'ta Calisti, 15=Canlida, 20=Eski Versiyon,
+# 30=Reddedildi. Kural denetimi icin sadece "onayda" olan (5) kolonlar
+# modele gonderilir.
+COLUMN_STATUS_PENDING = 5
 
 # --- Referans terim eşleştirme verisi sorgusu ---
 # Bu akışta (script denetimi) DataItem/Term eşleştirmesi kullanılmıyor

@@ -52,14 +52,17 @@ kararı verdiren, sonuçları koyu temalı bir web arayüzünde listeleyen araç
    - `ANTHROPIC_MODEL` (varsayılan: `claude-opus-5`)
 
 4. **SQL sorgularını düzenleyin** — `backend/config.py` içindeki
-   `MAIN_QUERY` ve `TERM_MATCH_QUERY` sabitlerini kendi tablo/görünüm
+   `MAIN_QUERY`, `COLUMN_QUERY_TEMPLATE` sabitlerini kendi tablo/görünüm
    adlarınıza göre güncelleyin. `MAIN_QUERY` en az `id`, `LocationName`,
-   `SchemaName`, `TableName` kolonlarını döndürmelidir; bunların dışındaki
-   tüm kolonlar otomatik olarak "ek veri" sayılıp modele gönderilir.
+   `DatabaseName`, `SchemaName`, `TableName` kolonlarını döndürmelidir;
+   bunların dışındaki tüm kolonlar otomatik olarak "ek veri" sayılıp modele
+   gönderilir. Şu anki sorgu, DataGov (DataOne) kataloğunun `DTG` şemasına
+   (`DataSystem`/`DataSet`/`DataScript`/`DataItem`) göre yazılmıştır —
+   detaylar için [PROJECT_NOTES.md](./PROJECT_NOTES.md).
 
-   Ayrıca `TERM_MATCH_COLUMN_KEY` sabiti (varsayılan `"KolonAdi"`), ek veri
-   içinde hangi alanın terim eşleştirmesine tabi tutulacak "kolon adı"
-   olduğunu belirtir — kendi şemanıza göre değiştirin.
+   `COLUMN_STATUS_PENDING` sabiti (varsayılan `5`), hangi `DataItem.StatusId`
+   değerinin "onay bekliyor" anlamına geldiğini belirtir; modele giden kolon
+   bağlamı (`OnayBekleyenKolonlar`) bu filtreyle sınırlanır.
 
 5. **rules.txt** — Proje kök dizinindeki `rules.txt` dosyasını kendi
    kurallarınızla doldurun. Bu dosya her istek anında taze okunur, sunucuyu
@@ -78,9 +81,18 @@ Tarayıcıda [http://localhost:8000](http://localhost:8000) adresini açın.
 
 1. Arayüzden bir model sağlayıcı seçin (şu an yalnızca "Claude API" aktif).
 2. "Sorguyu Çalıştır ve Denetle" butonuna basın.
-3. Sonuçlar ONAY / İADE gruplarında, her satırın yanında gerekçe ve terim
-   eşleştirme durumuyla birlikte listelenir. "Kopyala" butonu
-   `id-LocationName-SchemaName-TableName` formatındaki metni panoya kopyalar.
+3. Sonuçlar ONAY / İADE gruplarında listelenir. Her kartın başlığı
+   (Sunucu/Veritabanı/Şema/Tablo Adı) tıklanabilir — tıklanınca altında
+   tablonun tüm kolonları (tip, nullable, identity, PK, açıklama, iş
+   terimi) bir tabloda açılır; script'in dokunduğu kolonlar
+   yeşil(ADD)/turuncu(ALTER)/kırmızı(DROP) renklenir. Ayrı bir "Script'i
+   göster" linki ham DDL metnini gösterir. "Kopyala" butonu
+   `id-LocationName-DatabaseName-SchemaName-TableName` formatındaki metni
+   panoya kopyalar.
+4. Sadece incelenen ana tabloyu hedefleyen script'ler kural denetiminden
+   geçirilir; audit/arşiv companion script'leri (aynı mantıksal değişikliğin
+   parçası ama farklı bir fiziksel tabloyu hedefleyen script'ler) otomatik
+   onaylanır ve listede ayrı bir kalem olarak görünmez.
 
 ## Proje yapısı ve tasarım kararları
 

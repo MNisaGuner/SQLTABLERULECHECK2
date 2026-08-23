@@ -6,34 +6,153 @@ hatırlanabilmesi için.
 
 ## Amaç
 
-Butona basıldığında MS SQL Server'da sabit bir sorgu çalıştırılır, dönen her
-satır `rules.txt` dosyasındaki serbest metin kurallarına göre bir dil
-modeline (LLM) gönderilerek ONAY/İADE kararı verdirilir. Ayrıca her satırdaki
-"kolon adı" değeri, kurumun iş terimi sözlüğüyle karşılaştırılıp eşleşme
-durumu / öneri terimler gösterilir.
+DataGov (DataOne) kataloğunda onay bekleyen (`DataScript.StatusId=0`) MSSQL
+DB değişiklik script'lerini çekip, kurumun `rules.txt` dosyasındaki DB
+tasarım/isimlendirme standartlarına göre bir dil modeline (LLM) göndererek
+ONAY/İADE kararı verdirir. Karar verilirken script'in gerçekte hangi
+kolonlara ne yaptığı (ADD/ALTER/DROP) kendi metninden çıkarılır; sadece
+incelenen ana tabloyu hedefleyen script'ler kural denetiminden geçirilir —
+audit/arşiv companion script'leri otomatik onaylanır ve sonuç listesine
+hiç girmez (bkz. aşağıdaki ilgili bölümler).
+
+## Veri kaynağı: `DataGov.DTG` şeması
+
+- **`DataSystem`** — 3 seviyeli kendine-referanslı hiyerarşi (`ParentId`):
+  T1 = Sunucu, T2 = Veritabanı, T3 = Şema. (Not: bu eşleme deneme-yanılmayla
+  bulundu — script içeriğiyle karşılaştırılarak doğrulandı, örn.
+  `USE [BOAAI]; CREATE TABLE [BOAAI].[CAI].[Tablo]` → T2.Name='BOAAI',
+  T3.Name='CAI' ile birebir eşleşti.)
+- **`DataSet`** — mantıksal tablo/nesne kaydı (T4): `Name` (tablo adı),
+  `Description` (tablo açıklaması).
+- **`DataScript`** — bir DataSet'e ait fiziksel DDL script'i (`ScriptText`).
+  `StatusId=0` = onay bekliyor. Aynı `DataSetId`'ye birden fazla `DataScript`
+  bağlı olabilir (örn. ana tablo + audit mirror + arşiv tablosu için ayrı
+  script'ler — DataOne mantıksal bir değişikliği birden fazla fiziksel
+  script'e bölebiliyor, her biri farklı bir veritabanını hedefliyor).
+- **`DataItem`** — kolon kataloğu (`DataSetId` altında). `StatusId=5` =
+  "Bilgi Mimarı Onayında" (`COLUMN_STATUS_PENDING`, `config.py`). Bu
+  değerler DataOne tarafından yönetilir, uygulama **sadece okur, yazmaz**.
+- **`Term`** — iş terimi sözlüğü. Şu an aktif kullanılmıyor (bkz. "Terim
+  eşleştirme" bölümü).
+
+## `MAIN_QUERY` (`backend/config.py`)
+
+`DataSystem` (T1→T2→T3) → `DataSet` (T4) → `DataScript` (T7) zincirini
+join'leyip `StatusId=0` olan script'leri döndürür. Döndürdüğü alanlar:
+`id` (DataScriptId), `LocationName`, `DatabaseName`, `SchemaName`,
+`TableName`, `DataSetId` (kolon sorgusu için, sonra silinir),
+`TableDescription`, `ScriptText`.
+
+## Script parse — `backend/script_parser.py`
+
+`ScriptText` regex ile parse edilip, script'in **incelenen tabloya (ana
+tablo)** ne tür bir işlem yaptığı çıkarılır:
+
+- `CREATE TABLE [db].[schema].[table] (...)` → içindeki her kolon `ADD`
+- `ALTER TABLE ... ADD [Col] ...` → `ADD`
+- `ALTER TABLE ... ALTER COLUMN [Col] ...` → `ALTER`
+- `ALTER TABLE ... DROP COLUMN [Col1], [Col2]` → `DROP`
+
+Eşleşme, ifadenin hedefinin (`[Database].[Schema].[Table]`) satırın
+`DatabaseName`/`SchemaName`/`TableName` alanlarıyla **TAM** (case-insensitive)
+eşleşmesi şartına bağlıdır — aynı script bloğunda geçen audit/arşiv
+tablolarına veya trigger tanımlarına ait ifadeler bu sayede otomatik yok
+sayılır (10 farklı gerçek script'te test edildi, hepsi doğru ayrıştı).
+
+`_split_top_level()` yardımcı fonksiyonu, `NUMERIC(10,2)` gibi parantez içi
+virgülleri es geçerek üst seviye kolon tanımlarını doğru ayırır.
+
+## Ana tablo dışı (audit/arşiv) script'lerin otomatik onayı
+
+Kullanıcı onay verirken sadece **ana tabloya** ne yapıldığına bakıyor;
+audit/arşiv tablolarının güncellenmesi geliştiricinin zaten yapması gereken
+mekanik bir adım, ayrıca değerlendirilmiyor. Bu yüzden `main.py` ->
+`_process_row()` içinde:
+
+- `parse_column_changes()` sonucu **boşsa** (script tek başına ana tabloya
+  hiç dokunmuyorsa — örn. sadece `BOAAuditArchive` tablosunu hedefleyen bir
+  script), model çağrısı **atlanır**, otomatik `ONAY` verilir.
+- Bu satırlar `run_check()` içinde sonuç listesinden **tamamen çıkarılır**
+  (`results = [r for r in all_results if not r["auto_approved"]]`) — aynı
+  mantıksal tablonun hem ONAY hem İADE grubunda görünmesini önlemek için
+  (aynı `DataSetId`'ye bağlı birden fazla fiziksel script olabildiğinden,
+  bu görsel karışıklığa yol açıyordu).
+- Ana tabloyu hedefleyen script (aynı `DataSetId`'nin "gerçek" script'i)
+  normal şekilde modele gidip denetleniyor.
+
+## Kolon verisi: iki ayrı sorgu — `TumKolonlar` / `OnayBekleyenKolonlar`
+
+`COLUMN_QUERY_TEMPLATE` (`config.py`), `db.py -> _fetch_columns_for_datasets()`
+tarafından **iki farklı modda** çalıştırılır (`only_pending` parametresi):
+
+- `only_pending=False` → **`TumKolonlar`**: tabloya ait tüm kolonlar,
+  StatusId ne olursa olsun. Sadece **ekranda** tam bağlam göstermek için
+  kullanılır, modele **gönderilmez**.
+- `only_pending=True` (`AND di.StatusId = 5`) → **`OnayBekleyenKolonlar`**:
+  sadece o an onayda olan kolonlar. Kural denetiminin **TEK** kolon
+  kaynağıdır, modele bununla gidilir.
+
+Bu ayrım, modelin script'in dokunmadığı ama tabloya ait eski/canlı
+kolonları (örn. `CustomerId`) yanlışlıkla İade sebebi göstermesini önlemek
+için eklendi (gerçek bir bug'dı: script sadece 7 kolonu `ALTER COLUMN`
+ediyordu ama model tabloya ait ilgisiz bir kolonu gerekçe gösteriyordu).
+
+**Bilinen sınırlama:** Dev ortamında `DataItem.StatusId` şu an tüm
+satırlarda `NULL` — yani `OnayBekleyenKolonlar` her zaman boş dönüyor,
+model sadece `ScriptText`'e bakarak karar veriyor. DataOne gerçek akışta bu
+alanı doldurunca kolon bazlı bağlam (tip, nullable, PK, identity) da
+modele ulaşacak.
+
+`Identity`/`PrimaryKey` formatı: `CASE` ile `"seed,increment"` / `"PK"` /
+`"-"` string'i olarak dönüyor (checkbox/boolean değil) — kullanıcının
+kendi referans sorgusuyla birebir aynı format.
+
+## Kural yazımıyla ilgili bulgu: Identity vs Primary Key
+
+`rules.txt`'deki "Identity alan adı `<TabloAdı>Id` olmalı" kuralı, SQL
+Server'daki `IDENTITY` özelliğini (auto-increment) hedefliyor — sadece
+`PRIMARY KEY` olup `IDENTITY` olmayan kolonlar (örn. `LedgerId INT PRIMARY
+KEY`, identity'siz) bu kurala göre ihlal sayılmıyor; model bu ayrımı
+teknik olarak doğru yapıyor. Bu, kuralın yazımından kaynaklanan bir durum,
+kod hatası değil.
+
+## Frontend: toggle'lı kolon tablosu + script görüntüleyici + renklendirme
+
+- Kart başlığı (Sunucu/Veritabanı/Şema/Tablo Adı) tıklanabilir — tıklanınca
+  altında `TumKolonlar` bir tablo halinde açılır/kapanır (varsayılan kapalı).
+  Kolonlar: Kolon Adı, Fiziksel Veri Tipi, Boş Bırakılabilir, Identity,
+  Birincil Anahtar, Kolon Açıklaması, İş Terimi.
+- Ayrı bir "Script'i göster/gizle" toggle'ı ham `ScriptText`'i açar/kapatır
+  (kontrol amaçlı, varsayılan kapalı).
+- Kolon tablosunda, `changed_columns` (script_parser çıktısı) ile eşleşen
+  satırlar renklendirilir: **yeşil** = ADD, **turuncu** (`#ff9500`) = ALTER,
+  **kırmızı** = DROP. DROP edilip `TumKolonlar`'da artık bulunmayan kolonlar
+  için ayrı bir "siliniyor" notu satırı eklenir.
+- ONAY kartlarında gerekçe/red sebebi gösterilmez (zaten yok), sadece
+  başlık + kolon tablosu; İADE/HATA kartlarında gerekçe/hata metni
+  gösterilir.
 
 ## Teknoloji seçimleri ve nedenleri
 
 - **Backend: FastAPI** — async destekli, hafif, tip güvenli (Pydantic) ve
   hızlı geliştirme sağlıyor. Çoklu satırı eşzamanlı (concurrent) modele
   gönderebilmek için async doğal bir gereksinimdi.
-- **MSSQL: pyodbc** — Windows/Linux'ta ODBC Driver 17/18 ile en yaygın ve
-  stabil MSSQL istemcisi. Bağlantı yalnızca `SELECT` sorgularını
-  çalıştıracak şekilde kodlandı (`db.py` içinde `_run_select` bunu zorunlu
-  kılar).
+- **MSSQL: pyodbc** — ODBC Driver 18 ile bağlanıyor (`Encrypt=yes;
+  TrustServerCertificate=yes` eklendi, aksi halde localhost/self-signed
+  sertifikalarda bağlantı reddediliyordu). Bağlantı yalnızca `SELECT`
+  sorgularını çalıştıracak şekilde kodlandı (`db.py` içinde `_run_select`
+  bunu zorunlu kılar).
 - **Ortam değişkenleri: python-dotenv** — `.env` dosyası proje kök
-  dizininde tutuluyor; backend hangi dizinden başlatılırsa başlatılsın
-  (`backend/` içinden `uvicorn main:app`), `.env` ve `rules.txt` yolları
-  `config.PROJECT_ROOT` üzerinden mutlak olarak çözülüyor (CWD'ye bağımlı
-  değil).
+  dizininde tutuluyor; backend hangi dizinden başlatılırsa başlatılsın,
+  `.env` ve `rules.txt` yolları `config.PROJECT_ROOT` üzerinden mutlak
+  olarak çözülüyor (CWD'ye bağımlı değil).
 - **Frontend: Sade HTML + CSS + Vanilla JS** — Framework gerektirmeyecek
   kadar basit bir tek-sayfa arayüz; build adımı yok, doğrudan FastAPI
   `StaticFiles` ile servis ediliyor.
 - **LLM entegrasyonu: Anthropic Claude API** — Resmi `anthropic` Python
   SDK'sı, `AsyncAnthropic` istemcisi ile. Güvenilir JSON çıktı almak için
   serbest metin ayrıştırma yerine **structured outputs**
-  (`output_config.format` + JSON schema) kullanıldı — bu, model çıktısını
-  ayrıştırırken oluşabilecek hataları ortadan kaldırıyor.
+  (`output_config.format` + JSON schema) kullanıldı.
 
 ## Model provider (sağlayıcı) katmanı — strategy pattern
 
@@ -45,40 +164,16 @@ metot tanımlar:
 
 `ClaudeProvider` (`claude_provider.py`) bu arayüzü Anthropic API ile
 implemente eder. `LocalProvider` (`local_provider.py`) ileride Ollama gibi
-bir yerel model için doldurulacak bir iskelet olarak bırakıldı — arayüz aynı
-olduğu için `main.py`'deki `get_provider()` fonksiyonuna tek satırla
-eklenebilir.
+bir yerel model için doldurulacak bir iskelet olarak bırakıldı.
 
-Frontend'deki "Model Sağlayıcı" dropdown'ı seçilen değeri
-(`"claude"` / `"local"`) backend'e `POST /api/run-check` gövdesinde
-(`{"provider": "..."}`) iletir.
+### Terim eşleştirme — şu an pasif
 
-### Neden ayrı bir `check_term_match` fonksiyonu?
-
-Kullanıcı isteğinde açıkça belirtildiği gibi, ONAY/İADE kural denetimi ile
-terim eşleştirmesi **ayrı fonksiyonlar/adımlar** olarak kurgulandı (aynı
-provider üzerinden, ama bağımsız API çağrıları). Böylece ikisi birbirinden
-bağımsız test edilip geliştirilebilir. Şu anki implementasyonda her satır
-için iki ayrı model çağrısı yapılıyor; performans gerektiğinde bu ikisi tek
-bir çağrıda birleştirilebilir (schema'yı genişleterek), ama okunabilirlik ve
-modülerlik için ayrı tutuldu.
-
-## "Ek veri" kolonlarının otomatik ayrıştırılması
-
-`backend/config.py` içindeki `REQUIRED_COLUMNS = ["id", "LocationName",
-"SchemaName", "TableName"]` sabiti dışındaki tüm kolonlar, `main.py` içindeki
-`_split_row()` fonksiyonu tarafından otomatik olarak "ek veri" (denetime tabi
-veri) olarak ayrılıp modele gönderiliyor. Yani `MAIN_QUERY`'ye yeni bir kolon
-eklemek, kod değişikliği gerektirmeden o kolonu da denetime dahil eder.
-
-## Terim eşleştirme kolonu varsayımı
-
-Terim eşleştirmesi için, ek veri içinde hangi alanın "denetlenecek kolon adı"
-olduğunu bilmek gerekiyor. Bu, `config.py` içinde `TERM_MATCH_COLUMN_KEY`
-(varsayılan: `"KolonAdi"`) ile yapılandırılabilir bırakıldı — gerçek şemanıza
-göre bu anahtarı `MAIN_QUERY`'nizdeki ilgili kolon adıyla eşleştirin. Bu
-alan satırda yoksa veya boşsa, o satır için terim eşleştirmesi atlanır
-(`term_status: null`).
+`check_term_match` altyapısı hâlâ kodda duruyor ama bu akışta (script
+denetimi) kullanılmıyor: `TERM_MATCH_QUERY` bilerek boş/zararsız bırakıldı
+(`SELECT TOP 0 ...`), ve `extra` verisinde `TERM_MATCH_COLUMN_KEY`
+(`"KolonAdi"`) hiç geçmediği için `term_status` her zaman `null` dönüyor.
+İleride kolon bazlı terim eşleştirmesi gerekirse `OnayBekleyenKolonlar`
+üzerinden yeniden etkinleştirilebilir.
 
 ## Hata yönetimi
 
@@ -86,18 +181,17 @@ alan satırda yoksa veya boşsa, o satır için terim eşleştirmesi atlanır
   arayüzde kırmızı hata banner'ında gösterilir.
 - **MSSQL bağlantı/sorgu hatası** → `DatabaseError` → HTTP 502.
 - **Model API hatası (Claude)** → `ModelProviderError`. İstek düzeyinde
-  (örn. API anahtarı eksikse) HTTP 400 döner. Satır düzeyinde (örn. tek bir
-  satır için geçici bir API hatası) o satır "HATA" kategorisine düşer ve
-  diğer satırların denetimi devam eder — tek bir satırdaki geçici hata tüm
-  denetimi durdurmaz.
+  (örn. API anahtarı eksikse/kredi bittiyse) HTTP 400 döner. Satır
+  düzeyinde (örn. tek bir satır için geçici bir API hatası) o satır "HATA"
+  kategorisine düşer ve diğer satırların denetimi devam eder.
 
 ## Performans
 
 Satırlar `asyncio.gather` ile eşzamanlı işlenir; eşzamanlı model çağrısı
-sayısı `config.MAX_CONCURRENT_MODEL_CALLS` (varsayılan 5) ile sınırlanır —
-hem hız hem de API rate limit koruması için. Sistem promptu (kurallar dahil)
-`cache_control: ephemeral` ile işaretlenerek, aynı çalıştırma içindeki
-tekrarlanan çağrılarda prompt caching'den faydalanılır.
+sayısı `config.MAX_CONCURRENT_MODEL_CALLS` (varsayılan 5) ile sınırlanır.
+Sistem promptu `cache_control: ephemeral` ile işaretlenerek prompt
+caching'den faydalanılır. Audit/arşiv-only script'ler ve `TumKolonlar`
+modele hiç gönderilmediği için token maliyeti de azaltılmış oluyor.
 
 ## Klasör yapısı
 
@@ -105,19 +199,20 @@ tekrarlanan çağrılarda prompt caching'den faydalanılır.
 SQLTableRuleCheck/
   backend/
     main.py              FastAPI app, /api/run-check endpoint'i
-    config.py             Sabit SQL sorguları ve ayarlar
-    db.py                 MSSQL bağlantı ve sorgu çalıştırma (yalnızca SELECT)
+    config.py             Sabit SQL sorguları ve ayarlar (DataGov.DTG semasi)
+    db.py                 MSSQL baglanti, sorgu calistirma, kolon fetch (2 mod)
+    script_parser.py      ScriptText -> ADD/ALTER/DROP kolon cikarimi (regex)
     providers/
-      base.py             Soyut ModelProvider arayüzü
+      base.py             Soyut ModelProvider arayuzu
       claude_provider.py  Anthropic Claude API implementasyonu
-      local_provider.py   Yerel model (Ollama vb.) için iskelet
+      local_provider.py   Yerel model (Ollama vb.) icin iskelet
     rules_loader.py       rules.txt'yi her seferinde taze okur
   frontend/
     index.html
     style.css              Koyu tema
-    app.js                 Vanilla JS — fetch, render, kopyala
-  rules.txt                 Kullanıcı tarafından doldurulacak kurallar
-  .env.example               Şablon (gerçek .env repoya girmez)
+    app.js                 Vanilla JS -- fetch, render, toggle, renklendirme
+  rules.txt                 Kuveyt Turk BT veri yonetisimi standartlari
+  .env.example               Sablon (gercek .env repoya girmez)
   requirements.txt
   README.md
   PROJECT_NOTES.md            (bu dosya)
