@@ -68,6 +68,22 @@ kararı verdiren, sonuçları koyu temalı bir web arayüzünde listeleyen araç
    kurallarınızla doldurun. Bu dosya her istek anında taze okunur, sunucuyu
    yeniden başlatmanıza gerek yoktur.
 
+6. **Giriş ekranı (kullanıcı tablosu)** — Uygulama, `DTG.AppUser` tablosunda
+   doğrulanan bir kullanıcı adı/şifre girişi ister:
+
+   - `.env` dosyasına rastgele, uzun bir `SESSION_SECRET_KEY` ekleyin
+     (örn. `python -c "import secrets; print(secrets.token_hex(32))"`).
+     Bu değer oturum çerezlerini imzalar; değişirse tüm oturumlar düşer.
+   - [migrations/001_create_appuser.sql](./migrations/001_create_appuser.sql)
+     dosyasını SQL Server'da **elle** çalıştırın (uygulama bunu otomatik
+     çalıştırmaz).
+   - Yeni kullanıcı eklemek için (`backend/` dizininden):
+     ```bash
+     python scripts/create_user.py <kullanici_adi>
+     ```
+     Şifre terminalde gizli olarak sorulur, `bcrypt` ile hash'lenip tabloya
+     eklenir.
+
 ## Çalıştırma
 
 ```bash
@@ -75,13 +91,17 @@ cd backend
 uvicorn main:app --reload --port 8000
 ```
 
-Tarayıcıda [http://localhost:8000](http://localhost:8000) adresini açın.
+Tarayıcıda [http://localhost:8000](http://localhost:8000) adresini açın —
+önce `/login` ekranına yönlendirilirsiniz, oluşturduğunuz kullanıcı ile
+giriş yapmanız gerekir.
 
 ## Kullanım
 
-1. Arayüzden bir model sağlayıcı seçin (şu an yalnızca "Claude API" aktif).
-2. "Sorguyu Çalıştır ve Denetle" butonuna basın.
-3. Sonuçlar ONAY / İADE gruplarında listelenir. Her kartın başlığı
+1. Kullanıcı adı/şifre ile giriş yapın (sağ üstteki "Çıkış Yap" ile oturumu
+   kapatabilirsiniz).
+2. Arayüzden bir model sağlayıcı seçin (şu an yalnızca "Claude API" aktif).
+3. "Sorguyu Çalıştır ve Denetle" butonuna basın.
+4. Sonuçlar ONAY / İADE gruplarında listelenir. Her kartın başlığı
    (Sunucu/Veritabanı/Şema/Tablo Adı) tıklanabilir — tıklanınca altında
    tablonun tüm kolonları (tip, nullable, identity, PK, açıklama, iş
    terimi) bir tabloda açılır; script'in dokunduğu kolonlar
@@ -89,7 +109,7 @@ Tarayıcıda [http://localhost:8000](http://localhost:8000) adresini açın.
    göster" linki ham DDL metnini gösterir. "Kopyala" butonu
    `id-LocationName-DatabaseName-SchemaName-TableName` formatındaki metni
    panoya kopyalar.
-4. Sadece incelenen ana tabloyu hedefleyen script'ler kural denetiminden
+5. Sadece incelenen ana tabloyu hedefleyen script'ler kural denetiminden
    geçirilir; audit/arşiv companion script'leri (aynı mantıksal değişikliğin
    parçası ama farklı bir fiziksel tabloyu hedefleyen script'ler) otomatik
    onaylanır ve listede ayrı bir kalem olarak görünmez.
@@ -100,5 +120,11 @@ Detaylar için [PROJECT_NOTES.md](./PROJECT_NOTES.md) dosyasına bakın.
 
 ## Güvenlik notu
 
-`.env` dosyanızı asla paylaşmayın veya repoya eklemeyin. Veritabanı
-bağlantısı yalnızca `SELECT` sorgularını çalıştıracak şekilde kodlanmıştır.
+`.env` dosyanızı asla paylaşmayın veya repoya eklemeyin (`SESSION_SECRET_KEY`
+dahil — değişirse tüm oturumlar düşer, ama yine de gizli tutulmalı).
+
+Web uygulamasının kendisi (FastAPI endpoint'leri) veritabanına yalnızca
+`SELECT` sorguları çalıştırır. Tek istisna, `backend/scripts/create_user.py`
+— bilerek ayrı tutulan, elle çalıştırılan bir CLI script'i; `DTG.AppUser`
+tablosuna kullanıcı eklemek için INSERT yapar, web akışının bir parçası
+değildir.

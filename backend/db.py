@@ -6,17 +6,22 @@ calistirmak icin fonksiyon bilerek sunulmamistir.
 """
 
 import os
+import time
 
 import pyodbc
 
 from config import (
+    ALL_TERMS_QUERY,
     COLUMN_QUERY_TEMPLATE,
     COLUMN_STATUS_PENDING,
+    HISTORICAL_TERM_MATCH_QUERY,
     MAIN_QUERY,
     REQUIRED_COLUMNS,
+    TERM_CACHE_TTL_SECONDS,
     TERM_MATCH_QUERY,
     USER_LOOKUP_QUERY,
 )
+from term_suggester import build_historical_index, suggest_term
 
 
 class DatabaseError(Exception):
@@ -83,6 +88,53 @@ def _run_select(conn: pyodbc.Connection, query: str) -> list[dict]:
         raise DatabaseError(f"SQL sorgu hatasi: {exc}") from exc
 
 
+_term_cache: dict[str, object] = {"terms": None, "fetched_at": 0.0}
+
+
+def fetch_all_terms() -> list[dict]:
+    """DTG.Term sozlugunun tamamini ceker; TERM_CACHE_TTL_SECONDS boyunca
+    bellek ici cache'den doner (her review'da tekrar sorgulamamak icin)."""
+    now = time.monotonic()
+    if _term_cache["terms"] is not None and (now - _term_cache["fetched_at"]) < TERM_CACHE_TTL_SECONDS:
+        return _term_cache["terms"]
+
+    conn = _get_connection()
+    try:
+        rows = _run_select(conn, ALL_TERMS_QUERY)
+    finally:
+        conn.close()
+
+    _term_cache["terms"] = rows
+    _term_cache["fetched_at"] = now
+    return rows
+
+
+_historical_index_cache: dict[str, object] = {"index": None, "fetched_at": 0.0}
+
+
+def fetch_historical_term_index() -> dict[str, list[str]]:
+    """Kataloğda ayni kolon adinin daha once hangi terim(ler)e baglandigini
+    gosteren index'i doner (Katman 0, en guvenilir oneri kaynagi);
+    TERM_CACHE_TTL_SECONDS boyunca bellek ici cache'den doner."""
+    now = time.monotonic()
+    if (
+        _historical_index_cache["index"] is not None
+        and (now - _historical_index_cache["fetched_at"]) < TERM_CACHE_TTL_SECONDS
+    ):
+        return _historical_index_cache["index"]
+
+    conn = _get_connection()
+    try:
+        rows = _run_select(conn, HISTORICAL_TERM_MATCH_QUERY)
+    finally:
+        conn.close()
+
+    index = build_historical_index(rows)
+    _historical_index_cache["index"] = index
+    _historical_index_cache["fetched_at"] = now
+    return index
+
+
 def _fetch_columns_for_datasets(
     conn: pyodbc.Connection, dataset_ids: list[int], only_pending: bool = False
 ) -> dict[int, list[dict]]:
@@ -91,7 +143,10 @@ def _fetch_columns_for_datasets(
     only_pending=True ise sadece DataItem.StatusId=COLUMN_STATUS_PENDING (5,
     "Bilgi Mimari Onayinda") olan kolonlar doner -- modele gidecek, kural
     denetiminin TEK kaynagi olan kucuk set. only_pending=False ise tabloya
-    ait TUM kolonlar doner -- sadece ekranda tam baglam gostermek icin.
+    ait TUM kolonlar doner -- sadece ekranda tam baglam gostermek icin; bu
+    modda ayrica TermId'si bos kolonlara bilgilendirme amacli terim onerisi
+    ("TerimOnerisi") eklenir -- OnayBekleyenKolonlar'a EKLENMEZ, boylece
+    modele hic gonderilmez.
     """
     if not dataset_ids:
         return {}
@@ -109,19 +164,23 @@ def _fetch_columns_for_datasets(
     except pyodbc.Error as exc:
         raise DatabaseError(f"Kolon sorgusu hatasi: {exc}") from exc
 
+    terms = fetch_all_terms() if not only_pending else None
+    historical_index = fetch_historical_term_index() if not only_pending else None
+
     grouped: dict[int, list[dict]] = {}
     for r in raw_rows:
-        grouped.setdefault(r["DataSetId"], []).append(
-            {
-                "KolonAdi": r["ColumnName"],
-                "Aciklama": r["ColumnDescription"],
-                "VeriTipi": r["PhysicalType"],
-                "BosBirakilabilir": r["NullableInfo"],
-                "Identity": r["IdentityInfo"],
-                "BirincilAnahtar": r["PrimaryKeyInfo"],
-                "IsTerimi": r["TermName"],
-            }
-        )
+        entry = {
+            "KolonAdi": r["ColumnName"],
+            "Aciklama": r["ColumnDescription"],
+            "VeriTipi": r["PhysicalType"],
+            "BosBirakilabilir": r["NullableInfo"],
+            "Identity": r["IdentityInfo"],
+            "BirincilAnahtar": r["PrimaryKeyInfo"],
+            "IsTerimi": r["TermName"],
+        }
+        if terms is not None and not r["TermName"]:
+            entry["TerimOnerisi"] = suggest_term(r["ColumnName"], terms, historical_index)
+        grouped.setdefault(r["DataSetId"], []).append(entry)
     return grouped
 
 

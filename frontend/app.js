@@ -52,6 +52,35 @@ function escapeHtml(str) {
 
 const GEREKCE_LABEL = { IADE: "İade sebebi", HATA: "Hata" };
 const CHANGE_ROW_CLASS = { ADD: "col-added", ALTER: "col-altered", DROP: "col-dropped" };
+const MATCH_TYPE_LABEL = { HISTORICAL: "Geçmiş Eşleşme", EXACT: "Birebir", FUZZY: "Fuzzy" };
+const INFO_ICON_SVG =
+  '<svg class="term-info-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>';
+
+function matchDetailText(suggestion) {
+  if (suggestion.match_type === "FUZZY") return `%${Math.round(suggestion.score)} benzer`;
+  if (suggestion.match_type === "HISTORICAL") return "geçmiş eşleşme";
+  return "birebir eşleşme";
+}
+
+function termCellMarkup(isTerimi, terimOnerisi) {
+  if (isTerimi) return escapeHtml(isTerimi);
+  if (!terimOnerisi || terimOnerisi.length === 0) return "-";
+
+  const tooltipRows = terimOnerisi
+    .map((s) => {
+      const typeLabel = MATCH_TYPE_LABEL[s.match_type] || s.match_type;
+      const scoreText = s.match_type === "FUZZY" ? ` (%${Math.round(s.score)})` : "";
+      return `<div class="term-tooltip-row"><strong>${escapeHtml(s.term_name)}</strong> — ${escapeHtml(typeLabel)}${scoreText}</div>`;
+    })
+    .join("");
+
+  return `
+    <span class="term-info" tabindex="0">
+      ${INFO_ICON_SVG}
+      <span class="term-tooltip">${tooltipRows}</span>
+    </span>
+  `;
+}
 
 function columnsTableMarkup(columns, changedColumns) {
   const changeMap = new Map(
@@ -74,7 +103,7 @@ function columnsTableMarkup(columns, changedColumns) {
           <td class="col-center">${escapeHtml(c.Identity || "-")}</td>
           <td class="col-center">${escapeHtml(c.BirincilAnahtar || "-")}</td>
           <td>${escapeHtml(c.Aciklama || "-")}</td>
-          <td>${escapeHtml(c.IsTerimi || "-")}</td>
+          <td>${termCellMarkup(c.IsTerimi, c.TerimOnerisi)}</td>
         </tr>`;
     })
     .join("");
@@ -108,16 +137,32 @@ function columnsTableMarkup(columns, changedColumns) {
   `;
 }
 
+function buildTermSuggestionLines(columns) {
+  return (columns || [])
+    .filter((c) => !c.IsTerimi && c.TerimOnerisi && c.TerimOnerisi.length > 0)
+    .map((c) => `- ${c.KolonAdi} → ${c.TerimOnerisi[0].term_name} (${matchDetailText(c.TerimOnerisi[0])})`);
+}
+
+function buildCopyText(row) {
+  const suggestionLines = buildTermSuggestionLines(row.columns);
+  const suggestionsBlock = suggestionLines.length > 0 ? `Terim Önerileri:\n${suggestionLines.join("\n")}` : "";
+
+  if (row.karar === "ONAY") {
+    return suggestionsBlock;
+  }
+
+  const reasonText = (row.karar === "HATA" ? row.hata : row.gerekce) || "";
+  if (reasonText && suggestionsBlock) return `${reasonText}\n\n${suggestionsBlock}`;
+  return reasonText || suggestionsBlock;
+}
+
 function buildRowElement(row) {
   const wrapper = document.createElement("div");
   wrapper.className = "row-item";
 
   const gerekceText = row.karar === "HATA" ? row.hata : row.gerekce;
   const gerekceLabel = GEREKCE_LABEL[row.karar];
-  const suggestedTerm =
-    row.term_status && row.term_status.durum === "eslesmedi" && row.term_status.oneriler?.length
-      ? row.term_status.oneriler[0]
-      : null;
+  const copyText = buildCopyText(row);
 
   wrapper.innerHTML = `
     <div class="row-header">
@@ -143,8 +188,11 @@ function buildRowElement(row) {
         ${row.script_text ? '<span class="row-script-toggle-hint">Script\'i göster ▾</span>' : ""}
       </div>
       <div class="row-actions">
-        <button class="copy-btn" data-copy="${escapeHtml(row.label)}">Kopyala</button>
-        ${suggestedTerm ? `<button class="copy-btn" data-copy="${escapeHtml(suggestedTerm)}">Terimi Kopyala</button>` : ""}
+        <button
+          class="copy-btn"
+          data-copy="${escapeHtml(copyText)}"
+          ${copyText ? "" : 'disabled title="Önerilecek terim yok"'}
+        >Kopyala</button>
       </div>
     </div>
     ${gerekceLabel ? `<div class="row-gerekce"><span class="row-gerekce-label">${escapeHtml(gerekceLabel)}:</span> ${escapeHtml(gerekceText || "-")}</div>` : ""}

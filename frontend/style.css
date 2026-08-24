@@ -435,6 +435,56 @@ button#run-button:disabled {
   text-align: center !important;
 }
 
+.term-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  cursor: pointer;
+  outline: none;
+  vertical-align: middle;
+}
+
+.term-info-icon {
+  display: block;
+}
+
+.term-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  min-width: 180px;
+  max-width: 280px;
+  white-space: normal;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+  text-align: left;
+}
+
+.term-info:hover .term-tooltip,
+.term-info:focus .term-tooltip {
+  display: block;
+}
+
+.term-tooltip-row + .term-tooltip-row {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.term-tooltip-row strong {
+  color: var(--accent);
+}
+
 .row-gerekce {
   color: var(--text-dim);
   font-size: 13px;
@@ -481,4 +531,14 @@ button#run-button:disabled {
 .copy-btn.copied {
   color: var(--onay);
   border-color: var(--onay);
+}
+
+.copy-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.copy-btn:disabled:hover {
+  color: var(--text-dim);
+  border-color: var(--border);
 }

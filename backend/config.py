@@ -101,6 +101,38 @@ FROM DataGov.DTG.AppUser
 WHERE Username = ? AND IsActive = 1
 """
 
+# --- Gecmis kolon-terim eslesmeleri (Katman 0, en guvenilir oneri kaynagi) ---
+# Ayni kolon adi kataloğun BASKA bir yerinde (herhangi bir DataSet altinda)
+# daha once bir terime baglanmissa direkt o terim onerilir -- kisaltma <->
+# aciklayici isim arasinda metinsel benzerlik olmayan durumlar icin gerekli
+# (orn. "TCKN" <-> "Kimlik Numarasi").
+HISTORICAL_TERM_MATCH_QUERY = """
+SELECT di.Name AS ColumnName, t.Name AS TermName
+FROM DataGov.DTG.DataItem di WITH (NOLOCK)
+INNER JOIN DataGov.DTG.Term t WITH (NOLOCK) ON di.TermId = t.TermId
+"""
+
+# --- Terim onerisi (bkz. term_suggester.py) ---
+# TermId'si bos (hic eslesmemis) kolonlar icin tum terim sozlugu -- her
+# review'da degil, db.py -> fetch_all_terms() ile bellek ici cache'lenerek
+# cekilir (bkz. TERM_CACHE_TTL_SECONDS).
+ALL_TERMS_QUERY = """
+SELECT TermId, Name, EnglishName
+FROM DataGov.DTG.Term
+"""
+
+# Terim sozlugu cache suresi (saniye). Bu sure dolunca fetch_all_terms()
+# tekrar DB'ye gider; yeni eklenen terimler en gec bu sure icinde yansir.
+TERM_CACHE_TTL_SECONDS = int(os.getenv("TERM_CACHE_TTL_SECONDS", "300"))
+
+# Fuzzy terim onerisi icin minimum skor (0-100). Bunun altindaki eslesmeler
+# gosterilmez. RapidFuzz'un token_sort_ratio/partial_ratio skoruyla
+# karsilastirilir (bkz. TermMatchFromExcel/matcher.py -- ayni yontem).
+TERM_SUGGESTION_THRESHOLD = int(os.getenv("TERM_SUGGESTION_THRESHOLD", "70"))
+
+# En fazla kac fuzzy oneri gosterilecegi (birebir eslesmede tek sonuc doner).
+MAX_TERM_SUGGESTIONS = 3
+
 # --- Diğer ayarlar ---
 RULES_FILE_PATH = os.getenv("RULES_FILE_PATH", os.path.join(PROJECT_ROOT, "rules.txt"))
 

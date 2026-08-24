@@ -193,15 +193,42 @@ Sistem promptu `cache_control: ephemeral` ile işaretlenerek prompt
 caching'den faydalanılır. Audit/arşiv-only script'ler ve `TumKolonlar`
 modele hiç gönderilmediği için token maliyeti de azaltılmış oluyor.
 
+## Kullanıcı girişi (auth)
+
+Uygulama artık açık degil -- `DTG.AppUser` tablosunda dogrulanan basit bir
+kullanici adi/sifre girisi var:
+
+- **Sifreler**: `bcrypt` ile hash'lenir (`backend/auth.py`), duz metin asla
+  saklanmaz/karsilastirilmaz.
+- **Oturum**: Starlette'in `SessionMiddleware`'i ile imzali (signed) cookie
+  -- `SESSION_SECRET_KEY` (.env) ile imzalanir, 8 saatte duser. JWT/refresh
+  token gibi karmasik bir sisteme gerek yok, tek oturum yeterli.
+- **Koruma**: `require_auth` dependency'si `/api/run-check`'e (ve ileride
+  eklenecek her API endpoint'ine) uygulanir; session yoksa 401 doner.
+  Frontend (`app.js`) sayfa yuklenirken `/api/me`'yi kontrol eder, 401
+  alirsa otomatik `/login`'e yonlendirir.
+- **Kullanici ekleme**: `backend/scripts/create_user.py` -- elle
+  calistirilan bir CLI. Web uygulamasi (FastAPI) `AppUser` tablosuna asla
+  YAZMAZ, sadece login icin SELECT yapar (`db.py -> fetch_user_by_username`).
+  INSERT yetkisi bilerek sadece CLI script'e (`db.py -> get_raw_connection`)
+  tanindi -- boylece "web app sadece SELECT calistirir" ilkesi bozulmadi.
+- **Migration**: `migrations/001_create_appuser.sql` -- Claude Code
+  tarafindan calistirilmadi, kullanici elle calistirdi. DataGov'un ana
+  katalog tablolarina (DataSystem/DataSet/DataItem/DataScript/Term) hic
+  dokunulmuyor, `AppUser` tamamen bagimsiz yeni bir tablo.
+
 ## Klasör yapısı
 
 ```
 SQLTableRuleCheck/
   backend/
-    main.py              FastAPI app, /api/run-check endpoint'i
+    main.py              FastAPI app, auth + /api/run-check endpoint'leri
     config.py             Sabit SQL sorguları ve ayarlar (DataGov.DTG semasi)
     db.py                 MSSQL baglanti, sorgu calistirma, kolon fetch (2 mod)
     script_parser.py      ScriptText -> ADD/ALTER/DROP kolon cikarimi (regex)
+    auth.py                Sifre hash/dogrulama (bcrypt)
+    scripts/
+      create_user.py      CLI: DTG.AppUser'a kullanici ekler (elle calistirilir)
     providers/
       base.py             Soyut ModelProvider arayuzu
       claude_provider.py  Anthropic Claude API implementasyonu
@@ -209,8 +236,12 @@ SQLTableRuleCheck/
     rules_loader.py       rules.txt'yi her seferinde taze okur
   frontend/
     index.html
+    login.html              Giris ekrani
     style.css              Koyu tema
-    app.js                 Vanilla JS -- fetch, render, toggle, renklendirme
+    app.js                 Vanilla JS -- fetch, render, toggle, renklendirme, oturum kontrolu
+    login.js                Giris formu
+  migrations/
+    001_create_appuser.sql  DTG.AppUser DDL (elle calistirilir)
   rules.txt                 Kuveyt Turk BT veri yonetisimi standartlari
   .env.example               Sablon (gercek .env repoya girmez)
   requirements.txt
