@@ -32,8 +32,10 @@ hiç girmez (bkz. aşağıdaki ilgili bölümler).
 - **`DataItem`** — kolon kataloğu (`DataSetId` altında). `StatusId=5` =
   "Bilgi Mimarı Onayında" (`COLUMN_STATUS_PENDING`, `config.py`). Bu
   değerler DataOne tarafından yönetilir, uygulama **sadece okur, yazmaz**.
-- **`Term`** — iş terimi sözlüğü. Şu an aktif kullanılmıyor (bkz. "Terim
-  eşleştirme" bölümü).
+- **`Term`** — iş terimi sözlüğü. Eski satır bazlı terim eşleştirme akışı
+  (aşağıdaki "Terim eşleştirme — şu an pasif" bölümü) devre dışı, ama
+  kolon bazlı terim ÖNERİSİ (bkz. "Terim önerisi (RapidFuzz)" bölümü) bu
+  tabloyu aktif olarak okuyor.
 
 ## `MAIN_QUERY` (`backend/config.py`)
 
@@ -107,6 +109,63 @@ modele ulaşacak.
 `"-"` string'i olarak dönüyor (checkbox/boolean değil) — kullanıcının
 kendi referans sorgusuyla birebir aynı format.
 
+`TumKolonlar` içindeki, `TermId`'si boş (hiç eşleşmemiş) her kolona ayrıca
+`TerimOnerisi` alanı eklenir (bkz. "Terim önerisi (RapidFuzz)" bölümü) —
+`OnayBekleyenKolonlar`'a hiç eklenmez, yani modele gitmez.
+
+## Terim önerisi (RapidFuzz) — `backend/term_suggester.py`
+
+`DataItem.TermId` boş olan (hiç terimle eşleştirilmemiş) kolonlar için
+ekranda bilgilendirme amaçlı bir "önerilen terim" gösterilir. **Bu bir
+öneridir, karar değil** — ONAY/İADE mantığına hiç karışmaz, modele hiç
+gönderilmez (token maliyeti olmasın diye tamamen Python + RapidFuzz ile
+hesaplanır, `db.py -> _fetch_columns_for_datasets()` içinde `TumKolonlar`
+inşa edilirken).
+
+Üç katman, güvenilirlik sırasına göre denenir (`term_suggester.suggest_term`):
+
+1. **Geçmiş eşleşme (en güvenilir, `HISTORICAL`)** — aynı kolon adı
+   kataloğun **başka bir yerinde** (herhangi bir DataSet altında) daha önce
+   bir terime bağlanmışsa, string benzerliğine bakılmadan direkt o terim
+   önerilir. Bu katman, kısaltma ↔ açıklayıcı isim arasında hiçbir
+   metinsel benzerlik olmayan gerçek durumlar için eklendi (örn. `TCKN`
+   kolonu bir tabloda `Kimlik Numarası` terimine bağlanmışsa, başka bir
+   tablodaki eşleşmemiş `TCKN` kolonuna da otomatik önerilir — RapidFuzz
+   `"TCKN"` ile `"Kimlik Numarası"`yı asla benzer bulamaz). Index,
+   `db.py -> fetch_historical_term_index()` ile kurulur
+   (`HISTORICAL_TERM_MATCH_QUERY`: tüm `DataItem ⋈ Term` eşleşmeleri).
+2. **Term sözlüğünde birebir ad eşleşmesi (`EXACT`)** — `ColumnName`
+   (boşluk/alt çizgi normalize edilmiş, case-insensitive) `Term.Name` veya
+   `Term.EnglishName` ile tam eşleşiyorsa.
+3. **Fuzzy skor (`FUZZY`)** — `max(fuzz.token_sort_ratio, fuzz.partial_ratio)`
+   (kurumun `TermMatchFromExcel/matcher.py` projesiyle aynı yöntem),
+   `TERM_SUGGESTION_THRESHOLD` (varsayılan 70) üzerinde olan en iyi
+   `MAX_TERM_SUGGESTIONS` (3) terim, skorla birlikte döner.
+
+`Term` sözlüğü (`fetch_all_terms()`) ve geçmiş eşleşme index'i
+(`fetch_historical_term_index()`) her review'da yeniden sorgulanmaz;
+`TERM_CACHE_TTL_SECONDS` (varsayılan 300 sn) boyunca bellek içi cache'lenir.
+
+Frontend'de (`app.js`) İş Terimi hücresi boşsa ve öneri varsa küçük bir
+info ikonu gösterilir; hover/focus'ta terim adı + eşleşme tipi + (fuzzy
+ise) skor içeren bir tooltip açılır — satır içi metin göstermek yatay
+scroll'a sebep olduğu için bu şekle çevrildi.
+
+### "Kopyala" butonu — Dataone'a not için yeniden amaçlandı
+
+Eski davranış (`id-LocationName-DatabaseName-SchemaName-TableName` metnini
+kopyalamak) kaldırıldı. Buton artık `buildCopyText()` (`app.js`) ile,
+Dataone'a doğrudan yapıştırılabilir bir yorum metni üretir:
+
+- **İADE/HATA**: gerekçe/hata metni + (varsa) `Terim Önerileri:` bloğu
+  (tablodaki her eşleşmemiş kolon için en iyi öneri, `- Kolon → Terim
+  (eşleşme tipi)` formatında) birleşik kopyalanır.
+- **ONAY**: gerekçe yok (zaten yapısal sorun bulunmadı), sadece
+  `Terim Önerileri:` bloğu — bu, kullanıcının yapısal olarak sorunsuz bir
+  tabloyu "şu terimi eşleştir" notuyla elle İade'ye çevirip Dataone'a not
+  düşmesini sağlamak için.
+- **ONAY + hiç öneri yoksa**: buton disabled (kopyalanacak bir şey yok).
+
 ## Kural yazımıyla ilgili bulgu: Identity vs Primary Key
 
 `rules.txt`'deki "Identity alan adı `<TabloAdı>Id` olmalı" kuralı, SQL
@@ -131,6 +190,9 @@ kod hatası değil.
 - ONAY kartlarında gerekçe/red sebebi gösterilmez (zaten yok), sadece
   başlık + kolon tablosu; İADE/HATA kartlarında gerekçe/hata metni
   gösterilir.
+- İş Terimi hücresindeki öneri tooltip'i ve "Kopyala" butonunun Dataone'a
+  not olarak yeniden amaçlandırılması için "Terim önerisi (RapidFuzz)"
+  bölümüne bakınız.
 
 ## Teknoloji seçimleri ve nedenleri
 
@@ -226,6 +288,7 @@ SQLTableRuleCheck/
     config.py             Sabit SQL sorguları ve ayarlar (DataGov.DTG semasi)
     db.py                 MSSQL baglanti, sorgu calistirma, kolon fetch (2 mod)
     script_parser.py      ScriptText -> ADD/ALTER/DROP kolon cikarimi (regex)
+    term_suggester.py     Esmesmemis kolonlar icin RapidFuzz terim onerisi
     auth.py                Sifre hash/dogrulama (bcrypt)
     scripts/
       create_user.py      CLI: DTG.AppUser'a kullanici ekler (elle calistirilir)

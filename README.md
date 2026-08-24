@@ -64,6 +64,11 @@ kararı verdiren, sonuçları koyu temalı bir web arayüzünde listeleyen araç
    değerinin "onay bekliyor" anlamına geldiğini belirtir; modele giden kolon
    bağlamı (`OnayBekleyenKolonlar`) bu filtreyle sınırlanır.
 
+   Terim önerisi (bkz. madde 5) için `TERM_SUGGESTION_THRESHOLD` (varsayılan
+   `70`, fuzzy eşleşme için minimum skor) ve `TERM_CACHE_TTL_SECONDS`
+   (varsayılan `300`, terim sözlüğünün bellek içi cache süresi) `.env`
+   üzerinden isteğe bağlı ayarlanabilir — varsayılanlar çoğu durumda yeterli.
+
 5. **rules.txt** — Proje kök dizinindeki `rules.txt` dosyasını kendi
    kurallarınızla doldurun. Bu dosya her istek anında taze okunur, sunucuyu
    yeniden başlatmanıza gerek yoktur.
@@ -106,10 +111,17 @@ giriş yapmanız gerekir.
    tablonun tüm kolonları (tip, nullable, identity, PK, açıklama, iş
    terimi) bir tabloda açılır; script'in dokunduğu kolonlar
    yeşil(ADD)/turuncu(ALTER)/kırmızı(DROP) renklenir. Ayrı bir "Script'i
-   göster" linki ham DDL metnini gösterir. "Kopyala" butonu
-   `id-LocationName-DatabaseName-SchemaName-TableName` formatındaki metni
-   panoya kopyalar.
-5. Sadece incelenen ana tabloyu hedefleyen script'ler kural denetiminden
+   göster" linki ham DDL metnini gösterir.
+5. İş Terimi hücresinde bir kolon hiç terimle eşleştirilmemişse (`TermId`
+   boş) ve bir öneri bulunabiliyorsa küçük bir ℹ️ ikonu görünür; üzerine
+   gelince terim adı, eşleşme tipi (geçmiş eşleşme/birebir/fuzzy) ve
+   (fuzzy ise) skor gösteren bir tooltip açılır. Bu tamamen bilgilendirme
+   amaçlıdır, ONAY/İADE kararını etkilemez.
+6. "Kopyala" butonu, Dataone'a yapıştırılmaya hazır bir not üretir: İADE/HATA
+   kartlarında gerekçe + (varsa) tablodaki eşleşmemiş kolonlar için terim
+   önerileri; ONAY kartlarında sadece terim önerileri (varsa). Hiç önerilecek
+   bir şey yoksa buton pasiftir.
+7. Sadece incelenen ana tabloyu hedefleyen script'ler kural denetiminden
    geçirilir; audit/arşiv companion script'leri (aynı mantıksal değişikliğin
    parçası ama farklı bir fiziksel tabloyu hedefleyen script'ler) otomatik
    onaylanır ve listede ayrı bir kalem olarak görünmez.
